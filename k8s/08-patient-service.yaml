@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: patient-service
+  namespace: healthcare
+  labels:
+    app: patient-service
+    version: v1
+  annotations:
+    linkerd.io/inject: enabled
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: patient-service
+  template:
+    metadata:
+      labels:
+        app: patient-service
+        version: v1
+      annotations:
+        linkerd.io/inject: enabled
+        config.linkerd.io/proxy-cpu-request: "100m"
+        config.linkerd.io/proxy-memory-request: "128Mi"
+    spec:
+      initContainers:
+      - name: wait-for-db
+        image: busybox:1.35
+        command: ['sh', '-c', 'until nc -z postgres-service.healthcare.svc.cluster.local 5432; do echo waiting for postgres; sleep 2; done;']
+      containers:
+      - name: patient-service
+        image: edobr/patient-service:latest
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 3001
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: patient-service-config
+        env:
+        - name: SESSION_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: patient-service-secrets
+              key: SESSION_SECRET
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: patient-service-secrets
+              key: DB_PASSWORD
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 3001
+          initialDelaySeconds: 90
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 3001
+          initialDelaySeconds: 60
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /actuator/health
+            port: 3001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 12
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: patient-service-svc
+  namespace: healthcare
+  labels:
+    app: patient-service
+  annotations:
+    linkerd.io/inject: enabled
+spec:
+  selector:
+    app: patient-service
+  ports:
+  - name: http
+    port: 3001
+    targetPort: 3001
+    protocol: TCP
+  type: ClusterIP
